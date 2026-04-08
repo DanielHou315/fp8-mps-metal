@@ -144,12 +144,31 @@ Changed `fp8_scaled_mm_auto` threshold from `M<=16` to `M<=4`. Crossover benchma
 
 No regression for M=1, M=4 (still use fused), or M>=128 (already used fast path).
 
+### P2: Constant LUT decode replacing branchy fp8_e4m3fn_to_float (MERGED)
+
+Replaced the inline decode function (2 branches + `exp2()` per element) with a 256-entry `constant float` array in Metal constant address space. Zero runtime init, no barriers, cached per GPU core.
+
+| Shape | Before (P6) | After (LUT) | Improvement |
+|---|---|---|---|
+| decode/ffn_gate (M=1, N=14336) | 0.552ms | 0.497ms | **10% faster** |
+| decode/ffn_down (M=1, N=14336→4096) | 0.579ms | 0.489ms | **16% faster** |
+| batch4/ffn_gate (M=4, N=14336) | 1.626ms | 1.351ms | **17% faster** |
+| prefill128/qkv (M=128, N=4096) | 12.534ms | 10.430ms | **17% faster** |
+| prefill128/ffn_g (M=128, N=14336) | 43.127ms | 35.627ms | **17% faster** |
+| prefill512/qkv (M=512, N=4096) | 49.238ms | 40.560ms | **18% faster** |
+| prefill2k/qkv (M=2048, N=4096) | 195.523ms | 167.993ms | **14% faster** |
+
+Consistent 13-18% improvement on fused kernel. Fast path dequant also 3-5% faster.
+M=1 decode FFN ratio vs FP16 improved: 0.85x → 0.73x.
+
+Note: LUT shifts the fused/fast crossover — fused now wins up to M=8 at K=N=4096 (was M=4). Threshold left at M<=4 (conservative, works for all N).
+
 ---
 
 ## Proposed Implementation Order
 
 1. ~~**P6** (threshold fix)~~ — DONE
-2. **P2** (LUT decode) — moderate effort, speeds up all kernel paths
+2. ~~**P2** (LUT decode)~~ — DONE
 3. **P5** (fused scale+dequant kernel) — moderate effort, speeds up fast path
 4. **P3** (coalesced vecmat) — moderate effort, speeds up M=1 decode
 5. **P4** (weight cache) — API change, biggest win for inference loops
