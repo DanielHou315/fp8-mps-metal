@@ -183,30 +183,30 @@ kernel void fp8_scaled_vecmat_kernel(
 
     float sum = 0.0f;
 
-    // Each SIMD lane processes a stride of K
-    // 4-element unrolling within each lane, LUT decode
-    for (uint k = simd_lane * 4; k < K; k += 32 * 4) {
-        if (k + 3 < K) {
-            uint x_idx = k;
-            uint w_idx = row_offset + k;
-
-            float x0 = fp8_e4m3fn_lut[x[x_idx]];
-            float x1 = fp8_e4m3fn_lut[x[x_idx + 1]];
-            float x2 = fp8_e4m3fn_lut[x[x_idx + 2]];
-            float x3 = fp8_e4m3fn_lut[x[x_idx + 3]];
-
-            float w0 = fp8_e4m3fn_lut[W[w_idx]];
-            float w1 = fp8_e4m3fn_lut[W[w_idx + 1]];
-            float w2 = fp8_e4m3fn_lut[W[w_idx + 2]];
-            float w3 = fp8_e4m3fn_lut[W[w_idx + 3]];
-
-            sum += x0 * w0 + x1 * w1 + x2 * w2 + x3 * w3;
-        } else {
-            // Handle tail
-            for (uint kk = k; kk < min(k + 4, K); kk++) {
-                sum += fp8_e4m3fn_lut[x[kk]] * fp8_e4m3fn_lut[W[row_offset + kk]];
-            }
-        }
+    // Coalesced access: consecutive lanes read consecutive bytes.
+    // Each iteration, 32 lanes cover 32 contiguous elements (one cache line).
+    // 4x unroll in the outer loop for throughput.
+    uint K128 = (K / 128) * 128;
+    uint k = 0;
+    for (; k < K128; k += 128) {
+        // 4 coalesced reads of 32 elements each
+        float x0 = fp8_e4m3fn_lut[x[k + simd_lane]];
+        float w0 = fp8_e4m3fn_lut[W[row_offset + k + simd_lane]];
+        float x1 = fp8_e4m3fn_lut[x[k + 32 + simd_lane]];
+        float w1 = fp8_e4m3fn_lut[W[row_offset + k + 32 + simd_lane]];
+        float x2 = fp8_e4m3fn_lut[x[k + 64 + simd_lane]];
+        float w2 = fp8_e4m3fn_lut[W[row_offset + k + 64 + simd_lane]];
+        float x3 = fp8_e4m3fn_lut[x[k + 96 + simd_lane]];
+        float w3 = fp8_e4m3fn_lut[W[row_offset + k + 96 + simd_lane]];
+        sum += x0 * w0 + x1 * w1 + x2 * w2 + x3 * w3;
+    }
+    // Handle remaining elements in coalesced 32-wide steps
+    for (; k + 32 <= K; k += 32) {
+        sum += fp8_e4m3fn_lut[x[k + simd_lane]] * fp8_e4m3fn_lut[W[row_offset + k + simd_lane]];
+    }
+    // Handle tail (< 32 elements)
+    if (k + simd_lane < K) {
+        sum += fp8_e4m3fn_lut[x[k + simd_lane]] * fp8_e4m3fn_lut[W[row_offset + k + simd_lane]];
     }
 
     // SIMD reduction — hardware-accelerated sum across 32 lanes
