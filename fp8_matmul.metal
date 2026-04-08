@@ -234,6 +234,20 @@ kernel void fp8_to_half_kernel(
 }
 
 
+// ─── FP8 → scaled half dequantize (fused scale multiply) ───────────────────
+
+kernel void fp8_to_scaled_half_kernel(
+    device const uint8_t* input [[buffer(0)]],
+    device half* output [[buffer(1)]],
+    constant uint& count [[buffer(2)]],
+    constant float& scale [[buffer(3)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= count) return;
+    output[gid] = half(fp8_e4m3fn_lut[input[gid]] * scale);
+}
+
+
 // ─── Standalone float → FP8 quantize ───────────────────────────────────────
 
 kernel void float_to_fp8_kernel(

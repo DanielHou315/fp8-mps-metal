@@ -201,30 +201,27 @@ def fp8_scaled_mm_fast(A: torch.Tensor, B: torch.Tensor,
     M, K = A.shape
     N = B.shape[0]
 
-    # Dequant A to FP16
+    # Get scalar scale values for fused dequant+scale kernel
+    sa_val = scale_a.to(device="cpu", dtype=torch.float32).item()
+    sb_val = scale_b.to(device="cpu", dtype=torch.float32).item()
+
+    # Dequant+scale A to FP16 in one pass (fused: eliminates separate scale multiply)
     A_f16 = torch.empty(M, K, dtype=torch.float16, device="mps")
     count_a = A.numel()
-    lib.fp8_to_half_kernel(
+    lib.fp8_to_scaled_half_kernel(
         A.contiguous().view(-1), A_f16.view(-1),
-        count_a,
+        count_a, sa_val,
         threads=(count_a,), group_size=(256,),
     )
 
-    # Dequant B to FP16
+    # Dequant+scale B to FP16 in one pass
     B_f16 = torch.empty(N, K, dtype=torch.float16, device="mps")
     count_b = B.numel()
-    lib.fp8_to_half_kernel(
+    lib.fp8_to_scaled_half_kernel(
         B.contiguous().view(-1), B_f16.view(-1),
-        count_b,
+        count_b, sb_val,
         threads=(count_b,), group_size=(256,),
     )
-
-    # Apply scales BEFORE matmul to prevent FP16 overflow
-    # Raw FP8 values can be up to 448, so K-dim dot products overflow FP16 (max 65504)
-    sa = scale_a.to(device="mps", dtype=torch.float16)
-    sb = scale_b.to(device="mps", dtype=torch.float16)
-    A_f16 = A_f16 * sa
-    B_f16 = B_f16 * sb
 
     # Native FP16 matmul (uses hardware matrix multiply engine)
     # B is (N, K), we need A @ B^T = (M, K) @ (K, N) = (M, N)
