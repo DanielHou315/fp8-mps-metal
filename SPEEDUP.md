@@ -163,14 +163,50 @@ M=1 decode FFN ratio vs FP16 improved: 0.85x → 0.73x.
 
 Note: LUT shifts the fused/fast crossover — fused now wins up to M=8 at K=N=4096 (was M=4). Threshold left at M<=4 (conservative, works for all N).
 
+### P5: Fuse scale multiply into dequant kernel (MERGED)
+
+Added `fp8_to_scaled_half_kernel` that applies `output = half(lut[input] * scale)` in one pass, replacing separate dequant + elementwise scale multiply. Reduces fast path from 6 GPU dispatches to 4.
+
+| Shape | Before (P2) | After (fused scale) | Improvement |
+|---|---|---|---|
+| decode/ffn_gate fast (M=1, N=14336) | 2.397ms | 1.893ms | **21% faster** |
+| prefill128/ffn_g fast (N=14336) | 2.589ms | 2.044ms | **21% faster** |
+| prefill128/ffn_d fast (N=14336→4096) | 2.639ms | 2.062ms | **22% faster** |
+| prefill512/ffn_g fast (N=14336) | 4.066ms | 3.479ms | **14% faster** |
+| prefill2k/qkv fast (N=4096) | 3.497ms | 3.284ms | **6% faster** |
+
+Largest gains on big-N shapes where dequant of the weight matrix dominates.
+
+### P3: Coalesced memory access in vecmat kernel (MERGED)
+
+Restructured inner loop so consecutive SIMD lanes access consecutive bytes (one cache line per 32-lane iteration). Old pattern strided by 128 bytes between lanes.
+
+| Shape | Before (P5) | After (coalesced) | Improvement |
+|---|---|---|---|
+| decode/ffn_gate fused (M=1, N=14336) | 0.477ms | 0.464ms | **3% faster**, 0.63x vs FP16 |
+
+Modest improvement — the LUT (P2) already removed most of the decode overhead, so the remaining bottleneck is memory bandwidth (untiled access pattern). This optimization is most visible in larger-K shapes.
+
+### Cumulative results after P6+P2+P5+P3
+
+| Shape | Original | Current | Cumulative improvement |
+|---|---|---|---|
+| decode/ffn_gate (M=1, N=14336) fused | 0.553ms | 0.464ms | **16% faster**, 0.63x vs FP16 |
+| decode/ffn_down (M=1, N=14336→4096) fused | 0.568ms | 0.482ms | **15% faster**, 0.76x vs FP16 |
+| prefill128/ffn_g fast (N=14336) | 2.583ms | 2.044ms | **21% faster** |
+| prefill512/ffn_g fast (N=14336) | 4.103ms | 3.479ms | **15% faster** |
+| prefill2k/qkv fast (N=4096) | 3.371ms | 3.284ms | **3% faster** |
+| M=8 K=N=4096 (was fused→now fused, was slower) | 1.05ms | 0.92ms | **13% faster** |
+| M=16 K=N=4096 (was fused→now fast via P6) | 1.83ms | 0.96ms | **48% faster** |
+
 ---
 
 ## Proposed Implementation Order
 
 1. ~~**P6** (threshold fix)~~ — DONE
 2. ~~**P2** (LUT decode)~~ — DONE
-3. **P5** (fused scale+dequant kernel) — moderate effort, speeds up fast path
-4. **P3** (coalesced vecmat) — moderate effort, speeds up M=1 decode
+3. ~~**P5** (fused scale+dequant kernel)~~ — DONE
+4. ~~**P3** (coalesced vecmat)~~ — DONE
 5. **P4** (weight cache) — API change, biggest win for inference loops
 6. **P1** (tiled 2D kernel) — significant effort, needed for prefill parity with FP16
 7. **P7** (deprecate C++ bridge) — cleanup
