@@ -2,7 +2,7 @@
  * FP8 (e4m3fn) Dequantization + Matrix Multiplication on Metal
  *
  * Metal has no native FP8 type, so we store FP8 as uint8_t and decode
- * in-register using IEEE-754 bit extraction.
+ * via a 256-entry constant LUT (zero branches, zero transcendentals).
  *
  * e4m3fn format: [sign:1][exponent:4][mantissa:3], bias=7, no inf, NaN=0x7F/0xFF
  *
@@ -14,30 +14,45 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// ─── FP8 e4m3fn → float32 decode ───────────────────────────────────────────
+// ─── FP8 e4m3fn decode LUT ─────────────────────────────────────────────────
+// All 256 possible uint8 → float32 mappings, precomputed.
+// Constant address space: cached per GPU core, zero init cost.
+// NaN values (0x7F, 0xFF) map to 0.0f.
 
-inline float fp8_e4m3fn_to_float(uint8_t bits) {
-    // NaN values: 0x7F (0_1111_111) and 0xFF (1_1111_111)
-    if ((bits & 0x7F) == 0x7F) return 0.0f;
-
-    uint sign = (bits >> 7) & 1;
-    uint exp_bits = (bits >> 3) & 0xF;  // 4-bit exponent
-    uint mant_bits = bits & 0x7;         // 3-bit mantissa
-
-    float value;
-    if (exp_bits == 0) {
-        // Subnormal: value = (-1)^sign * 2^(1-bias) * (0.mantissa)
-        // bias=7, so 2^(-6) = 1/64
-        value = float(mant_bits) / 8.0f * (1.0f / 64.0f);
-    } else {
-        // Normal: value = (-1)^sign * 2^(exp-bias) * (1.mantissa)
-        float mantissa = 1.0f + float(mant_bits) / 8.0f;
-        int exponent = int(exp_bits) - 7;  // bias = 7
-        value = mantissa * exp2(float(exponent));
-    }
-
-    return sign ? -value : value;
-}
+constant float fp8_e4m3fn_lut[256] = {
+    0.0000000000f, 0.0019531250f, 0.0039062500f, 0.0058593750f, 0.0078125000f, 0.0097656250f, 0.0117187500f, 0.0136718750f,
+    0.0156250000f, 0.0175781250f, 0.0195312500f, 0.0214843750f, 0.0234375000f, 0.0253906250f, 0.0273437500f, 0.0292968750f,
+    0.0312500000f, 0.0351562500f, 0.0390625000f, 0.0429687500f, 0.0468750000f, 0.0507812500f, 0.0546875000f, 0.0585937500f,
+    0.0625000000f, 0.0703125000f, 0.0781250000f, 0.0859375000f, 0.0937500000f, 0.1015625000f, 0.1093750000f, 0.1171875000f,
+    0.1250000000f, 0.1406250000f, 0.1562500000f, 0.1718750000f, 0.1875000000f, 0.2031250000f, 0.2187500000f, 0.2343750000f,
+    0.2500000000f, 0.2812500000f, 0.3125000000f, 0.3437500000f, 0.3750000000f, 0.4062500000f, 0.4375000000f, 0.4687500000f,
+    0.5000000000f, 0.5625000000f, 0.6250000000f, 0.6875000000f, 0.7500000000f, 0.8125000000f, 0.8750000000f, 0.9375000000f,
+    1.0000000000f, 1.1250000000f, 1.2500000000f, 1.3750000000f, 1.5000000000f, 1.6250000000f, 1.7500000000f, 1.8750000000f,
+    2.0000000000f, 2.2500000000f, 2.5000000000f, 2.7500000000f, 3.0000000000f, 3.2500000000f, 3.5000000000f, 3.7500000000f,
+    4.0000000000f, 4.5000000000f, 5.0000000000f, 5.5000000000f, 6.0000000000f, 6.5000000000f, 7.0000000000f, 7.5000000000f,
+    8.0000000000f, 9.0000000000f, 10.0000000000f, 11.0000000000f, 12.0000000000f, 13.0000000000f, 14.0000000000f, 15.0000000000f,
+    16.0000000000f, 18.0000000000f, 20.0000000000f, 22.0000000000f, 24.0000000000f, 26.0000000000f, 28.0000000000f, 30.0000000000f,
+    32.0000000000f, 36.0000000000f, 40.0000000000f, 44.0000000000f, 48.0000000000f, 52.0000000000f, 56.0000000000f, 60.0000000000f,
+    64.0000000000f, 72.0000000000f, 80.0000000000f, 88.0000000000f, 96.0000000000f, 104.0000000000f, 112.0000000000f, 120.0000000000f,
+    128.0000000000f, 144.0000000000f, 160.0000000000f, 176.0000000000f, 192.0000000000f, 208.0000000000f, 224.0000000000f, 240.0000000000f,
+    256.0000000000f, 288.0000000000f, 320.0000000000f, 352.0000000000f, 384.0000000000f, 416.0000000000f, 448.0000000000f, 0.0000000000f,
+    -0.0000000000f, -0.0019531250f, -0.0039062500f, -0.0058593750f, -0.0078125000f, -0.0097656250f, -0.0117187500f, -0.0136718750f,
+    -0.0156250000f, -0.0175781250f, -0.0195312500f, -0.0214843750f, -0.0234375000f, -0.0253906250f, -0.0273437500f, -0.0292968750f,
+    -0.0312500000f, -0.0351562500f, -0.0390625000f, -0.0429687500f, -0.0468750000f, -0.0507812500f, -0.0546875000f, -0.0585937500f,
+    -0.0625000000f, -0.0703125000f, -0.0781250000f, -0.0859375000f, -0.0937500000f, -0.1015625000f, -0.1093750000f, -0.1171875000f,
+    -0.1250000000f, -0.1406250000f, -0.1562500000f, -0.1718750000f, -0.1875000000f, -0.2031250000f, -0.2187500000f, -0.2343750000f,
+    -0.2500000000f, -0.2812500000f, -0.3125000000f, -0.3437500000f, -0.3750000000f, -0.4062500000f, -0.4375000000f, -0.4687500000f,
+    -0.5000000000f, -0.5625000000f, -0.6250000000f, -0.6875000000f, -0.7500000000f, -0.8125000000f, -0.8750000000f, -0.9375000000f,
+    -1.0000000000f, -1.1250000000f, -1.2500000000f, -1.3750000000f, -1.5000000000f, -1.6250000000f, -1.7500000000f, -1.8750000000f,
+    -2.0000000000f, -2.2500000000f, -2.5000000000f, -2.7500000000f, -3.0000000000f, -3.2500000000f, -3.5000000000f, -3.7500000000f,
+    -4.0000000000f, -4.5000000000f, -5.0000000000f, -5.5000000000f, -6.0000000000f, -6.5000000000f, -7.0000000000f, -7.5000000000f,
+    -8.0000000000f, -9.0000000000f, -10.0000000000f, -11.0000000000f, -12.0000000000f, -13.0000000000f, -14.0000000000f, -15.0000000000f,
+    -16.0000000000f, -18.0000000000f, -20.0000000000f, -22.0000000000f, -24.0000000000f, -26.0000000000f, -28.0000000000f, -30.0000000000f,
+    -32.0000000000f, -36.0000000000f, -40.0000000000f, -44.0000000000f, -48.0000000000f, -52.0000000000f, -56.0000000000f, -60.0000000000f,
+    -64.0000000000f, -72.0000000000f, -80.0000000000f, -88.0000000000f, -96.0000000000f, -104.0000000000f, -112.0000000000f, -120.0000000000f,
+    -128.0000000000f, -144.0000000000f, -160.0000000000f, -176.0000000000f, -192.0000000000f, -208.0000000000f, -224.0000000000f, -240.0000000000f,
+    -256.0000000000f, -288.0000000000f, -320.0000000000f, -352.0000000000f, -384.0000000000f, -416.0000000000f, -448.0000000000f, 0.0000000000f
+};
 
 // ─── float32 → FP8 e4m3fn encode ───────────────────────────────────────────
 
@@ -48,7 +63,7 @@ inline uint8_t float_to_fp8_e4m3fn(float val) {
         val = -val;
     }
 
-    // Max representable: 448.0 (1111_110 = exp=14, bias=7 → 2^7 * 1.75 = 224... actually 2^8*(1+6/8)=448)
+    // Max representable: 448.0 (1111_110 = exp=14, bias=7 → 2^8*(1+6/8)=448)
     // Clamp to max
     if (val >= 448.0f) {
         return (sign << 7) | 0x7E;  // 0_1111_110 = max normal
@@ -111,29 +126,29 @@ kernel void fp8_scaled_matmul_kernel(
 
     float sum = 0.0f;
 
-    // 4-element unrolling on K for better memory bandwidth
+    // 4-element unrolling on K with LUT decode
     uint k = 0;
     uint K4 = (K / 4) * 4;
     for (; k < K4; k += 4) {
         uint a_idx = row * K + k;
         uint b_idx = col * K + k;
 
-        float a0 = fp8_e4m3fn_to_float(A[a_idx]);
-        float a1 = fp8_e4m3fn_to_float(A[a_idx + 1]);
-        float a2 = fp8_e4m3fn_to_float(A[a_idx + 2]);
-        float a3 = fp8_e4m3fn_to_float(A[a_idx + 3]);
+        float a0 = fp8_e4m3fn_lut[A[a_idx]];
+        float a1 = fp8_e4m3fn_lut[A[a_idx + 1]];
+        float a2 = fp8_e4m3fn_lut[A[a_idx + 2]];
+        float a3 = fp8_e4m3fn_lut[A[a_idx + 3]];
 
-        float b0 = fp8_e4m3fn_to_float(B[b_idx]);
-        float b1 = fp8_e4m3fn_to_float(B[b_idx + 1]);
-        float b2 = fp8_e4m3fn_to_float(B[b_idx + 2]);
-        float b3 = fp8_e4m3fn_to_float(B[b_idx + 3]);
+        float b0 = fp8_e4m3fn_lut[B[b_idx]];
+        float b1 = fp8_e4m3fn_lut[B[b_idx + 1]];
+        float b2 = fp8_e4m3fn_lut[B[b_idx + 2]];
+        float b3 = fp8_e4m3fn_lut[B[b_idx + 3]];
 
         sum += a0 * b0 + a1 * b1 + a2 * b2 + a3 * b3;
     }
 
     // Handle remaining elements
     for (; k < K; k++) {
-        sum += fp8_e4m3fn_to_float(A[row * K + k]) * fp8_e4m3fn_to_float(B[col * K + k]);
+        sum += fp8_e4m3fn_lut[A[row * K + k]] * fp8_e4m3fn_lut[B[col * K + k]];
     }
 
     // Apply scaling
@@ -169,27 +184,27 @@ kernel void fp8_scaled_vecmat_kernel(
     float sum = 0.0f;
 
     // Each SIMD lane processes a stride of K
-    // 4-element unrolling within each lane
+    // 4-element unrolling within each lane, LUT decode
     for (uint k = simd_lane * 4; k < K; k += 32 * 4) {
         if (k + 3 < K) {
             uint x_idx = k;
             uint w_idx = row_offset + k;
 
-            float x0 = fp8_e4m3fn_to_float(x[x_idx]);
-            float x1 = fp8_e4m3fn_to_float(x[x_idx + 1]);
-            float x2 = fp8_e4m3fn_to_float(x[x_idx + 2]);
-            float x3 = fp8_e4m3fn_to_float(x[x_idx + 3]);
+            float x0 = fp8_e4m3fn_lut[x[x_idx]];
+            float x1 = fp8_e4m3fn_lut[x[x_idx + 1]];
+            float x2 = fp8_e4m3fn_lut[x[x_idx + 2]];
+            float x3 = fp8_e4m3fn_lut[x[x_idx + 3]];
 
-            float w0 = fp8_e4m3fn_to_float(W[w_idx]);
-            float w1 = fp8_e4m3fn_to_float(W[w_idx + 1]);
-            float w2 = fp8_e4m3fn_to_float(W[w_idx + 2]);
-            float w3 = fp8_e4m3fn_to_float(W[w_idx + 3]);
+            float w0 = fp8_e4m3fn_lut[W[w_idx]];
+            float w1 = fp8_e4m3fn_lut[W[w_idx + 1]];
+            float w2 = fp8_e4m3fn_lut[W[w_idx + 2]];
+            float w3 = fp8_e4m3fn_lut[W[w_idx + 3]];
 
             sum += x0 * w0 + x1 * w1 + x2 * w2 + x3 * w3;
         } else {
             // Handle tail
             for (uint kk = k; kk < min(k + 4, K); kk++) {
-                sum += fp8_e4m3fn_to_float(x[kk]) * fp8_e4m3fn_to_float(W[row_offset + kk]);
+                sum += fp8_e4m3fn_lut[x[kk]] * fp8_e4m3fn_lut[W[row_offset + kk]];
             }
         }
     }
@@ -215,7 +230,7 @@ kernel void fp8_to_half_kernel(
     uint gid [[thread_position_in_grid]]
 ) {
     if (gid >= count) return;
-    output[gid] = half(fp8_e4m3fn_to_float(input[gid]));
+    output[gid] = half(fp8_e4m3fn_lut[input[gid]]);
 }
 
 
