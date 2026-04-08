@@ -1,10 +1,12 @@
 """
-Build system for fp8_metal PyTorch extension.
+Build system for fp8_metal PyTorch extension — DEPRECATED.
+
+Prefer fp8_mps_native.py which uses torch.mps.compile_shader() for
+zero-copy GPU dispatch. This C++ extension exists only for PyTorch < 2.10
+where compile_shader() is unavailable.
 
 Metal shader is compiled at runtime via MTL::Device::newLibrary(source)
 since the `metal` compiler requires Xcode (not available with CLT-only).
-
-Pattern: mpsparse/iterative/cgd/setup.py
 """
 
 import os

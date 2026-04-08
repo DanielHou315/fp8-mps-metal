@@ -1,12 +1,12 @@
 /**
- * FP8 Metal PyTorch Extension Bridge
+ * FP8 Metal PyTorch Extension Bridge — DEPRECATED
  *
- * Singleton Metal context that compiles fp8_matmul.metal at runtime
- * and dispatches FP8 scaled matmul / dequant / quant kernels.
+ * Use fp8_mps_native.py instead. The native path via torch.mps.compile_shader()
+ * operates directly on MPS tensor buffers (zero-copy), while this C++ bridge
+ * forces MPS→CPU→Metal→CPU→MPS round-trips for every call.
  *
- * Patterns from:
- *   mpsparse/spmv.cpp      — metal-cpp includes, device/queue/pipeline singleton, PYBIND11_MODULE
- *   metalQwen3/MetalContext — pipeline caching, library loading
+ * This file is kept for environments where torch.mps.compile_shader() is
+ * unavailable (PyTorch < 2.10).
  */
 
 #define NS_PRIVATE_IMPLEMENTATION
@@ -359,13 +359,16 @@ std::tuple<torch::Tensor, torch::Tensor> fp8_quantize(torch::Tensor input) {
 // ─── PYBIND11 Module ────────────────────────────────────────────────────────
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    m.doc() = "DEPRECATED: Use fp8_mps_native instead. This C++ bridge forces "
+              "CPU round-trips. The native path (torch.mps.compile_shader) is "
+              "zero-copy and significantly faster.";
     m.def("fp8_scaled_mm", &fp8_scaled_mm,
-          "FP8 scaled matrix multiplication on Metal GPU",
+          "FP8 scaled matrix multiplication on Metal GPU (DEPRECATED: use fp8_mps_native)",
           py::arg("A"), py::arg("B"), py::arg("scale_a"), py::arg("scale_b"));
     m.def("fp8_dequantize", &fp8_dequantize,
-          "FP8 to float16 dequantization on Metal GPU",
+          "FP8 to float16 dequantization on Metal GPU (DEPRECATED: use fp8_mps_native)",
           py::arg("input"), py::arg("scale"));
     m.def("fp8_quantize", &fp8_quantize,
-          "Float to FP8 quantization on Metal GPU",
+          "Float to FP8 quantization on Metal GPU (DEPRECATED: use fp8_mps_native)",
           py::arg("input"));
 }
