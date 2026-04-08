@@ -199,6 +199,21 @@ Modest improvement — the LUT (P2) already removed most of the decode overhead,
 | M=8 K=N=4096 (was fused→now fused, was slower) | 1.05ms | 0.92ms | **13% faster** |
 | M=16 K=N=4096 (was fused→now fast via P6) | 1.83ms | 0.96ms | **48% faster** |
 
+### P4: Weight cache API — fp8_prepare_weight (MERGED)
+
+Added `fp8_prepare_weight(B_q, scale_b)` to pre-dequantize weights to scaled FP16 once. Auto selector detects float16 B and skips per-call dequant.
+
+| Shape | Unprepared | Prepared | Speedup | Prepared/FP16 |
+|---|---|---|---|---|
+| batch4/ffn_gate (M=4) | 1.37ms | 0.82ms | **1.68x** | 1.20x |
+| prefill128/qkv (M=128) | 1.02ms | 0.55ms | **1.85x** | 1.63x |
+| prefill128/ffn_g (M=128) | 2.07ms | 1.08ms | **1.92x** | 1.28x |
+| prefill128/ffn_d (M=128) | 2.05ms | 1.03ms | **1.99x** | 1.29x |
+| prefill512/qkv (M=512) | 1.48ms | 1.00ms | **1.48x** | 1.28x |
+| prefill512/ffn_g (M=512) | 3.48ms | 2.46ms | **1.42x** | 1.19x |
+
+**Note:** For M=1 (autoregressive decode), the vecmat fused kernel with uint8 B is faster (0.26ms) than the prepared fast path (0.49ms). Use unprepared path for M=1.
+
 ---
 
 ## Proposed Implementation Order
@@ -207,6 +222,6 @@ Modest improvement — the LUT (P2) already removed most of the decode overhead,
 2. ~~**P2** (LUT decode)~~ — DONE
 3. ~~**P5** (fused scale+dequant kernel)~~ — DONE
 4. ~~**P3** (coalesced vecmat)~~ — DONE
-5. **P4** (weight cache) — API change, biggest win for inference loops
+5. ~~**P4** (weight cache)~~ — DONE
 6. **P1** (tiled 2D kernel) — significant effort, needed for prefill parity with FP16
 7. **P7** (deprecate C++ bridge) — cleanup
