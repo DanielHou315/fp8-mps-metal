@@ -112,6 +112,32 @@ class TestMatmulBenchmarks:
 
 
 @pytest.mark.benchmark
+class TestPreparedWeight:
+    """Benchmark prepared (cached) vs unprepared weight dequant."""
+
+    @pytest.mark.parametrize("label,M,K,N", ALL_SHAPES, ids=[s[0] for s in ALL_SHAPES])
+    def test_prepared_vs_unprepared(self, label, M, K, N):
+        A_q, B_q, A_s, B_s, _, _ = make_fp8_pair(M, K, N)
+        B_prepared = fp8_mps_native.fp8_prepare_weight(B_q, B_s)
+
+        unprepared_ms = sync_and_time(lambda: fp8_mps_native.fp8_scaled_mm_auto(A_q, B_q, A_s, B_s))
+        prepared_ms = sync_and_time(lambda: fp8_mps_native.fp8_scaled_mm_auto(A_q, B_prepared, A_s, B_s))
+
+        A_f16 = torch.randn(M, K, dtype=torch.float16, device="mps")
+        B_f16 = torch.randn(K, N, dtype=torch.float16, device="mps")
+        fp16_ms = sync_and_time(lambda: A_f16 @ B_f16)
+
+        ratio = prepared_ms / fp16_ms
+        speedup = unprepared_ms / prepared_ms
+
+        print(f"\n  {label:>24}  M={M:<5} K={K:<5} N={N:<5}")
+        print(f"    unprepared: {unprepared_ms:8.3f}ms")
+        print(f"    prepared:   {prepared_ms:8.3f}ms  ({speedup:.2f}x faster)")
+        print(f"    fp16:       {fp16_ms:8.3f}ms")
+        print(f"    prepared/fp16: {ratio:.2f}x {'(FP8 wins)' if ratio < 1 else '(FP16 wins)'}")
+
+
+@pytest.mark.benchmark
 class TestCrossover:
     """Find where fused kernel loses to fast path as M grows."""
 
@@ -332,6 +358,22 @@ def print_report():
         fa_e = torch.sqrt(((fp8_mps_native.fp8_scaled_mm_fast(A_q,B_q,A_s,B_s).cpu().float()-ref)**2).mean()).item()/rms
         f16_e = torch.sqrt((((A_f.half()@B_f.half().T).float()-ref)**2).mean()).item()/rms
         print(f"  M={M:<5} K={K:<5} N={N:<5}  fused={fu_e:.4%}  fast={fa_e:.4%}  fp16={f16_e:.4%}")
+
+    # Prepared weight comparison
+    print(f"\n{'='*90}")
+    print("  PREPARED WEIGHT: cached FP16 weights vs per-call dequant")
+    print(f"{'='*90}")
+    print(f"  {'label':>24}  {'unprepared':>12} {'prepared':>12} {'fp16':>12} {'prep/fp16':>10} {'speedup':>8}")
+    for label, M, K, N in ALL_SHAPES:
+        A_q, B_q, A_s, B_s, _, _ = make_fp8_pair(M, K, N)
+        B_prep = fp8_mps_native.fp8_prepare_weight(B_q, B_s)
+        A_f16 = torch.randn(M, K, dtype=torch.float16, device="mps")
+        B_f16 = torch.randn(K, N, dtype=torch.float16, device="mps")
+
+        unprep = sync_and_time(lambda: fp8_mps_native.fp8_scaled_mm_auto(A_q, B_q, A_s, B_s))
+        prep = sync_and_time(lambda: fp8_mps_native.fp8_scaled_mm_auto(A_q, B_prep, A_s, B_s))
+        f16 = sync_and_time(lambda: A_f16 @ B_f16)
+        print(f"  {label:>24}  {unprep:>11.3f}ms {prep:>11.3f}ms {f16:>11.3f}ms {prep/f16:>9.2f}x {unprep/prep:>7.2f}x")
 
     print(f"\n{'='*90}")
     print("  DONE")

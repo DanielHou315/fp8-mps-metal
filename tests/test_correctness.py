@@ -174,6 +174,45 @@ class TestVecmat:
         assert result.shape == (1, 256)
 
 
+class TestPreparedWeight:
+    """Test fp8_prepare_weight + prepared fast path."""
+
+    @pytest.mark.parametrize("M,K,N", [
+        (1, 4096, 4096),
+        (1, 4096, 14336),
+        (4, 4096, 4096),
+        (128, 4096, 4096),
+        (128, 4096, 14336),
+    ])
+    def test_prepared_accuracy(self, M, K, N):
+        import fp8_mps_native
+
+        A_q, B_q, A_s, B_s, A_f32, B_f32 = make_fp8_pair(M, K, N)
+        ref = A_f32 @ B_f32.T
+
+        B_prepared = fp8_mps_native.fp8_prepare_weight(B_q, B_s)
+        assert B_prepared.dtype == torch.float16
+        assert B_prepared.shape == B_q.shape
+
+        result = fp8_mps_native.fp8_scaled_mm_auto(A_q, B_prepared, A_s, B_s).cpu().float()
+        ref_rms = torch.sqrt((ref ** 2).mean()).item()
+        rel_rmse = torch.sqrt(((result - ref) ** 2).mean()).item() / ref_rms
+        assert rel_rmse < 0.15, f"Prepared weight RMSE {rel_rmse:.4%} exceeds 15%"
+
+    def test_prepared_matches_unprepared(self):
+        import fp8_mps_native
+
+        M, K, N = 64, 256, 128
+        A_q, B_q, A_s, B_s, _, _ = make_fp8_pair(M, K, N)
+
+        unprepared = fp8_mps_native.fp8_scaled_mm_fast(A_q, B_q, A_s, B_s).cpu().float()
+        B_prepared = fp8_mps_native.fp8_prepare_weight(B_q, B_s)
+        prepared = fp8_mps_native.fp8_scaled_mm_fast(A_q, B_prepared, A_s, B_s).cpu().float()
+
+        diff = (unprepared - prepared).abs().max().item()
+        assert diff < 1e-2, f"Prepared vs unprepared diff {diff} exceeds 0.01"
+
+
 class TestMonkeyPatch:
 
     def test_install_uninstall(self):

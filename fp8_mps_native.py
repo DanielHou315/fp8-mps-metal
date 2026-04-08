@@ -156,21 +156,43 @@ def fp8_quantize(input: torch.Tensor):
     return output, inv_scale
 
 
+def fp8_prepare_weight(B_q: torch.Tensor, scale_b: torch.Tensor) -> torch.Tensor:
+    """
+    Pre-dequantize FP8 weight matrix to scaled FP16. Cache the result
+    for repeated inference to avoid re-dequantizing every call.
+
+    B_q: (N, K) uint8 — FP8 e4m3fn encoded weight matrix
+    scale_b: per-tensor scale
+    Returns: (N, K) float16 tensor on MPS (scaled, ready for matmul)
+    """
+    lib = _get_lib()
+    if B_q.device.type != "mps":
+        B_q = B_q.to("mps")
+    sb_val = scale_b.to(device="cpu", dtype=torch.float32).item()
+    B_f16 = torch.empty(B_q.shape, dtype=torch.float16, device="mps")
+    count = B_q.numel()
+    lib.fp8_to_scaled_half_kernel(
+        B_q.contiguous().view(-1), B_f16.view(-1),
+        count, sb_val,
+        threads=(count,), group_size=(256,),
+    )
+    return B_f16
+
+
 def fp8_scaled_mm_auto(A: torch.Tensor, B: torch.Tensor,
                        scale_a: torch.Tensor, scale_b: torch.Tensor) -> torch.Tensor:
     """
     Auto-select best FP8 matmul strategy based on dimensions.
 
-    M<=4 uses the fused kernel: vecmat (M=1) or 2D matmul (M=2-4).
-    At these sizes, the fused path avoids intermediate FP16 buffer
-    allocation and extra dequant dispatches that dominate at small M.
+    If B is pre-prepared (float16 from fp8_prepare_weight), always uses
+    the fast path since the B dequant cost is eliminated.
 
-    M>=5 uses dequant+native-FP16-matmul (fast path), which leverages
-    Apple's hardware-tiled matmul engine. The untiled fused 2D kernel
-    loses to the fast path from M=8 at both K=N=4096 and K=4096,N=14336.
-    Threshold of 4 is conservative (crossover is between M=4 and M=8).
+    Otherwise: M<=4 uses the fused kernel (vecmat for M=1, 2D for M=2-4).
+    M>=5 uses dequant+native-FP16-matmul (fast path).
     """
     M = A.shape[0]
+    if B.dtype == torch.float16:
+        return fp8_scaled_mm_fast(A, B, scale_a, scale_b)
     if M <= 4:
         return fp8_scaled_mm(A, B, scale_a, scale_b)
     return fp8_scaled_mm_fast(A, B, scale_a, scale_b)
@@ -201,11 +223,9 @@ def fp8_scaled_mm_fast(A: torch.Tensor, B: torch.Tensor,
     M, K = A.shape
     N = B.shape[0]
 
-    # Get scalar scale values for fused dequant+scale kernel
     sa_val = scale_a.to(device="cpu", dtype=torch.float32).item()
-    sb_val = scale_b.to(device="cpu", dtype=torch.float32).item()
 
-    # Dequant+scale A to FP16 in one pass (fused: eliminates separate scale multiply)
+    # Dequant+scale A to FP16 in one pass
     A_f16 = torch.empty(M, K, dtype=torch.float16, device="mps")
     count_a = A.numel()
     lib.fp8_to_scaled_half_kernel(
@@ -214,17 +234,20 @@ def fp8_scaled_mm_fast(A: torch.Tensor, B: torch.Tensor,
         threads=(count_a,), group_size=(256,),
     )
 
-    # Dequant+scale B to FP16 in one pass
-    B_f16 = torch.empty(N, K, dtype=torch.float16, device="mps")
-    count_b = B.numel()
-    lib.fp8_to_scaled_half_kernel(
-        B.contiguous().view(-1), B_f16.view(-1),
-        count_b, sb_val,
-        threads=(count_b,), group_size=(256,),
-    )
+    # B: use pre-prepared FP16 if available, otherwise dequant+scale
+    if B.dtype == torch.float16:
+        B_f16 = B
+    else:
+        sb_val = scale_b.to(device="cpu", dtype=torch.float32).item()
+        B_f16 = torch.empty(N, K, dtype=torch.float16, device="mps")
+        count_b = B.numel()
+        lib.fp8_to_scaled_half_kernel(
+            B.contiguous().view(-1), B_f16.view(-1),
+            count_b, sb_val,
+            threads=(count_b,), group_size=(256,),
+        )
 
-    # Native FP16 matmul (uses hardware matrix multiply engine)
-    # B is (N, K), we need A @ B^T = (M, K) @ (K, N) = (M, N)
+    # Native FP16 matmul: A @ B^T = (M, K) @ (K, N) = (M, N)
     C = A_f16 @ B_f16.T
 
     return C.float()
