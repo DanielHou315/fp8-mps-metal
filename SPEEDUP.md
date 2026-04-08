@@ -216,6 +216,40 @@ Added `fp8_prepare_weight(B_q, scale_b)` to pre-dequantize weights to scaled FP1
 
 ---
 
+### P1: Tiled 2D matmul with threadgroup shared memory (MERGED)
+
+Replaced untiled one-thread-per-element matmul with 16x16 tiled blocked GEMM. Each tile iteration cooperatively loads 16x16 blocks of A and B into threadgroup memory (2KB total), then all threads reuse them. Reduces global memory traffic from O(M*N*K) to O(M*K + N*K).
+
+| Shape | Before (untiled) | After (tiled) | Improvement |
+|---|---|---|---|
+| batch4/qkv_proj (M=4, K=N=4096) | 0.576ms | 0.471ms | **18% faster** |
+| batch4/ffn_gate (M=4, K=4096, N=14336) | 1.349ms | 0.576ms | **57% faster** |
+| prefill128/qkv (M=128, K=N=4096) | 10.41ms | 3.47ms | **67% faster** |
+| prefill128/ffn_g (M=128, N=14336) | 35.49ms | 11.49ms | **68% faster** |
+| prefill512/qkv (M=512, K=N=4096) | 40.53ms | 13.10ms | **68% faster** |
+| prefill2k/qkv (M=2048, K=N=4096) | 160.84ms | 51.58ms | **68% faster** |
+
+Tiled kernel now beats fast path up to M=16 (was M=4). Auto threshold updated M<=4 → M<=16.
+
+### P7: Deprecate C++ bridge (MERGED)
+
+Added deprecation notices to `fp8_bridge.cpp`, `setup.py`, and pybind11 module docstring. The native path (`fp8_mps_native.py` via `torch.mps.compile_shader`) is zero-copy and significantly faster. C++ bridge kept for PyTorch < 2.10.
+
+### Final results after all 7 optimizations
+
+| Shape | Original | Final | Improvement | vs FP16 |
+|---|---|---|---|---|
+| decode/ffn_gate (M=1, N=14336) | 0.553ms | 0.479ms | **13% faster** | **0.68x (FP8 wins)** |
+| decode/ffn_down (M=1, N=14336→4096) | 0.568ms | 0.480ms | **15% faster** | **0.76x (FP8 wins)** |
+| batch4/ffn_gate (M=4, N=14336) | 1.624ms | 0.576ms | **65% faster** | **0.84x (FP8 wins)** |
+| prefill128/qkv (M=128, fast) | 0.995ms | 1.022ms | ~same | 3.02x |
+| prefill128/ffn_g (M=128, fast) | 2.583ms | 2.039ms | **21% faster** | 2.59x |
+| prefill128/qkv (M=128, prepared) | — | 0.550ms | **new API** | 1.65x |
+| prefill128/ffn_g (M=128, prepared) | — | 1.039ms | **new API** | 1.31x |
+| M=16 K=N=4096 (was routed to slow path) | 1.83ms | 0.69ms | **62% faster** | — |
+
+---
+
 ## Proposed Implementation Order
 
 1. ~~**P6** (threshold fix)~~ — DONE
@@ -223,5 +257,5 @@ Added `fp8_prepare_weight(B_q, scale_b)` to pre-dequantize weights to scaled FP1
 3. ~~**P5** (fused scale+dequant kernel)~~ — DONE
 4. ~~**P3** (coalesced vecmat)~~ — DONE
 5. ~~**P4** (weight cache)~~ — DONE
-6. **P1** (tiled 2D kernel) — significant effort, needed for prefill parity with FP16
-7. **P7** (deprecate C++ bridge) — cleanup
+6. ~~**P1** (tiled 2D kernel)~~ — DONE
+7. ~~**P7** (deprecate C++ bridge)~~ — DONE
