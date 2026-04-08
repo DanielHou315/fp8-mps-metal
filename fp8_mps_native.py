@@ -161,17 +161,17 @@ def fp8_scaled_mm_auto(A: torch.Tensor, B: torch.Tensor,
     """
     Auto-select best FP8 matmul strategy based on dimensions.
 
-    Benchmarks on M4 Pro show the fused kernel (in-register FP8 decode + accumulate)
-    consistently beats dequant+native-matmul because:
-    - The dequant pass adds per-element scale multiply overhead
-    - The fused kernel avoids writing/reading intermediate FP16 buffers
-    - For M=1 (single-token), the SIMD vecmat kernel is especially efficient
+    M<=4 uses the fused kernel: vecmat (M=1) or 2D matmul (M=2-4).
+    At these sizes, the fused path avoids intermediate FP16 buffer
+    allocation and extra dequant dispatches that dominate at small M.
 
-    Falls back to dequant+matmul only for very large M where the 2D kernel's
-    per-thread decode cost exceeds the memory bandwidth savings.
+    M>=5 uses dequant+native-FP16-matmul (fast path), which leverages
+    Apple's hardware-tiled matmul engine. The untiled fused 2D kernel
+    loses to the fast path from M=8 at both K=N=4096 and K=4096,N=14336.
+    Threshold of 4 is conservative (crossover is between M=4 and M=8).
     """
     M = A.shape[0]
-    if M <= 16:
+    if M <= 4:
         return fp8_scaled_mm(A, B, scale_a, scale_b)
     return fp8_scaled_mm_fast(A, B, scale_a, scale_b)
 

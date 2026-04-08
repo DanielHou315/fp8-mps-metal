@@ -8,3 +8,4 @@ metal-cpp/
 *.air
 *.metallib
 .eggs/
+tests/.venv/
