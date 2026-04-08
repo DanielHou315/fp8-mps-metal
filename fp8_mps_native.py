@@ -187,13 +187,15 @@ def fp8_scaled_mm_auto(A: torch.Tensor, B: torch.Tensor,
     If B is pre-prepared (float16 from fp8_prepare_weight), always uses
     the fast path since the B dequant cost is eliminated.
 
-    Otherwise: M<=4 uses the fused kernel (vecmat for M=1, 2D for M=2-4).
-    M>=5 uses dequant+native-FP16-matmul (fast path).
+    Otherwise: M<=16 uses the tiled fused kernel (vecmat for M=1,
+    tiled 2D for M=2-16). The tiled kernel's shared-memory reuse
+    beats dequant+native-matmul up to M=16 at both K=N=4096 and
+    K=4096,N=14336. Crossover is between M=16 and M=32.
     """
     M = A.shape[0]
     if B.dtype == torch.float16:
         return fp8_scaled_mm_fast(A, B, scale_a, scale_b)
-    if M <= 4:
+    if M <= 16:
         return fp8_scaled_mm(A, B, scale_a, scale_b)
     return fp8_scaled_mm_fast(A, B, scale_a, scale_b)
 

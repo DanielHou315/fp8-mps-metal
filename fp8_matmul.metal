@@ -102,14 +102,18 @@ inline uint8_t float_to_fp8_e4m3fn(float val) {
     return (sign << 7) | uint8_t(exp_bits << 3) | uint8_t(mant);
 }
 
-// ─── General MxN Scaled MatMul ──────────────────────────────────────────────
+// ─── Tiled MxN Scaled MatMul ────────────────────────────────────────────────
 // A: (M,K) uint8 FP8, B: (N,K) uint8 FP8 (transposed), out: (M,N) float32
 // scale_mode: 0=per-tensor, 1=per-channel(row)
-// Threadgroup: 16x16
+// Threadgroup: 16x16, tiled over K dimension to reduce global memory traffic.
+// Each tile loads 16x16 blocks of A and B into threadgroup memory,
+// reducing reads from O(M*N*K) to O(M*K + N*K).
+
+#define TILE 16
 
 kernel void fp8_scaled_matmul_kernel(
     device const uint8_t* A [[buffer(0)]],       // (M, K) row-major FP8
-    device const uint8_t* B [[buffer(1)]],       // (N, K) row-major FP8 (B is transposed: output row j uses B[j,:])
+    device const uint8_t* B [[buffer(1)]],       // (N, K) row-major FP8 (B is transposed)
     device float* C [[buffer(2)]],               // (M, N) output
     device const float* scale_a [[buffer(3)]],   // per-tensor [1] or per-row [M]
     device const float* scale_b [[buffer(4)]],   // per-tensor [1] or per-row [N]
@@ -117,44 +121,52 @@ kernel void fp8_scaled_matmul_kernel(
     constant uint& N [[buffer(6)]],
     constant uint& K [[buffer(7)]],
     constant uint& scale_mode [[buffer(8)]],     // 0=per-tensor, 1=per-channel
-    uint2 gid [[thread_position_in_grid]]
+    uint2 gid [[thread_position_in_grid]],
+    uint2 tid [[thread_position_in_threadgroup]],
+    uint2 tgid [[threadgroup_position_in_grid]]
 ) {
-    uint row = gid.y;  // M dimension
-    uint col = gid.x;  // N dimension
+    // Output element this thread computes
+    uint row = tgid.y * TILE + tid.y;
+    uint col = tgid.x * TILE + tid.x;
 
-    if (row >= M || col >= N) return;
+    threadgroup float tileA[TILE][TILE];  // 16x16 = 1KB
+    threadgroup float tileB[TILE][TILE];  // 16x16 = 1KB
 
     float sum = 0.0f;
 
-    // 4-element unrolling on K with LUT decode
-    uint k = 0;
-    uint K4 = (K / 4) * 4;
-    for (; k < K4; k += 4) {
-        uint a_idx = row * K + k;
-        uint b_idx = col * K + k;
+    // Tile over K dimension
+    for (uint kk = 0; kk < K; kk += TILE) {
+        // Cooperatively load tiles: each of 256 threads loads one A and one B element
+        // tileA[tid.y][tid.x] = decoded A[row, kk + tid.x]
+        uint a_row = tgid.y * TILE + tid.y;
+        uint a_k = kk + tid.x;
+        tileA[tid.y][tid.x] = (a_row < M && a_k < K)
+            ? fp8_e4m3fn_lut[A[a_row * K + a_k]] : 0.0f;
 
-        float a0 = fp8_e4m3fn_lut[A[a_idx]];
-        float a1 = fp8_e4m3fn_lut[A[a_idx + 1]];
-        float a2 = fp8_e4m3fn_lut[A[a_idx + 2]];
-        float a3 = fp8_e4m3fn_lut[A[a_idx + 3]];
+        // tileB[tid.x][tid.y] = decoded B[col_for_tid.x, kk + tid.y]
+        // tid.x indexes the N dimension, tid.y indexes the K dimension
+        // Threads with consecutive tid.y access B[same_row, consecutive_k] → coalesced
+        uint b_row = tgid.x * TILE + tid.x;
+        uint b_k = kk + tid.y;
+        tileB[tid.x][tid.y] = (b_row < N && b_k < K)
+            ? fp8_e4m3fn_lut[B[b_row * K + b_k]] : 0.0f;
 
-        float b0 = fp8_e4m3fn_lut[B[b_idx]];
-        float b1 = fp8_e4m3fn_lut[B[b_idx + 1]];
-        float b2 = fp8_e4m3fn_lut[B[b_idx + 2]];
-        float b3 = fp8_e4m3fn_lut[B[b_idx + 3]];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        sum += a0 * b0 + a1 * b1 + a2 * b2 + a3 * b3;
+        // Accumulate partial dot product from tile
+        for (uint k = 0; k < TILE; k++) {
+            sum += tileA[tid.y][k] * tileB[tid.x][k];
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    // Handle remaining elements
-    for (; k < K; k++) {
-        sum += fp8_e4m3fn_lut[A[row * K + k]] * fp8_e4m3fn_lut[B[col * K + k]];
+    // Write result
+    if (row < M && col < N) {
+        float sa = (scale_mode == 0) ? scale_a[0] : scale_a[row];
+        float sb = (scale_mode == 0) ? scale_b[0] : scale_b[col];
+        C[row * N + col] = sum * sa * sb;
     }
-
-    // Apply scaling
-    float sa = (scale_mode == 0) ? scale_a[0] : scale_a[row];
-    float sb = (scale_mode == 0) ? scale_b[0] : scale_b[col];
-    C[row * N + col] = sum * sa * sb;
 }
 
 

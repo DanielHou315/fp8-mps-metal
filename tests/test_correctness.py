@@ -104,7 +104,7 @@ class TestMatmulAccuracy:
             A_q, B_q, A_s, B_s, _, _ = make_fp8_pair(M, K, N)
             auto_result = fp8_mps_native.fp8_scaled_mm_auto(A_q, B_q, A_s, B_s).cpu().float()
 
-            if M <= 4:
+            if M <= 16:
                 expected = fp8_mps_native.fp8_scaled_mm(A_q, B_q, A_s, B_s).cpu().float()
             else:
                 expected = fp8_mps_native.fp8_scaled_mm_fast(A_q, B_q, A_s, B_s).cpu().float()
