@@ -265,24 +265,38 @@ On NVIDIA, INT4 (GPTQ, AWQ) is standard for memory savings with good speed. On M
 ## ComfyUI on Mac
 
 ```bash
-# Install ComfyUI
-git clone https://github.com/comfyanonymous/ComfyUI.git
-cd ComfyUI
-pip install -r requirements.txt
-
 # Required environment variables
 export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
 export PYTORCH_ENABLE_MPS_FALLBACK=1
-
-# For FP8 models (FLUX, SD3.5):
-# Install fp8-mps-metal and add to ComfyUI's startup
-pip install -e /path/to/fp8-mps-metal
-# Add to ComfyUI/main.py or a custom node:
-import fp8_mps_patch; fp8_mps_patch.install()
-
-# Run with memory optimizations
-python main.py --force-fp16 --use-split-cross-attention
 ```
+
+### Installing fp8-mps-metal as a ComfyUI custom node
+
+Create a custom node directory and drop in an `__init__.py` that applies the patch:
+
+```bash
+mkdir -p ~/ComfyUI/custom_nodes/fp8-mps-metal
+```
+
+```python
+# ~/ComfyUI/custom_nodes/fp8-mps-metal/__init__.py
+import sys, logging
+
+sys.path.insert(0, "/path/to/fp8-mps-metal")  # adjust to your clone location
+
+try:
+    import fp8_mps_patch
+    fp8_mps_patch.install()
+    logging.info("fp8-mps-metal: FP8 Metal kernel patch installed")
+except Exception as e:
+    logging.warning(f"fp8-mps-metal: Failed to install FP8 patch: {e}")
+
+NODE_CLASS_MAPPINGS = {}
+```
+
+ComfyUI loads this on startup and all FLUX/SD3.5 FP8 `_scaled_mm` calls are transparently routed through the Metal kernel. No ComfyUI source changes needed.
+
+> **Tested with:** ComfyUI Desktop 0.18.5, PyTorch 2.10.0, MPS device on M4 Pro
 
 ---
 

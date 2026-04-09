@@ -21,6 +21,18 @@ Monkey-patch (`fp8_mps_patch.py`) replaces `torch._scaled_mm` to transparently r
 | `fp8_bridge.cpp` | C++ pybind11 extension (legacy path) |
 | `setup.py` | Builds C++ extension, auto-downloads metal-cpp headers |
 
+## ComfyUI integration
+
+Installed as a custom node at `~/ComfyUI/custom_nodes/fp8-mps-metal/__init__.py`.
+
+On startup, the node adds this repo to `sys.path` and calls `fp8_mps_patch.install()`, transparently routing all FLUX/SD3.5 FP8 `_scaled_mm` calls through the Metal kernel. No ComfyUI source changes needed.
+
+To reinstall or update after moving the repo:
+```sh
+# Path is hardcoded in the __init__.py
+cat ~/ComfyUI/custom_nodes/fp8-mps-metal/__init__.py
+```
+
 ## Tests and benchmarks
 
 Located in `tests/` with a dedicated venv:
