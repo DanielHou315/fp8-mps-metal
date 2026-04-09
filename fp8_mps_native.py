@@ -13,6 +13,7 @@ import os
 
 _lib = None
 _SHADER_SOURCE = None
+_use_sgmma = False
 
 
 def _load_shader_source():
@@ -29,12 +30,13 @@ def _load_shader_source():
 
 def _get_lib():
     """Get or create the compiled shader library (singleton)."""
-    global _lib
+    global _lib, _use_sgmma
     if _lib is not None:
         return _lib
 
     source = _load_shader_source()
     _lib = torch.mps.compile_shader(source)
+    _use_sgmma = "fp8_scaled_matmul_sgmma_kernel" in dir(_lib)
     return _lib
 
 
@@ -85,12 +87,21 @@ def fp8_scaled_mm(A: torch.Tensor, B: torch.Tensor,
             threads=(total_threads,), group_size=(threads_per_group,),
                     )
     else:
-        # General 2D matmul
-        lib.fp8_scaled_matmul_kernel(
-            A, B, C, scale_a, scale_b,
-            M, N, K, scale_mode,
-            threads=(N, M), group_size=(16, 16),
-                    )
+        if _use_sgmma:
+            # SGMMA: 128 threads (4 simdgroups), 32x32 output tiles
+            lib.fp8_scaled_matmul_sgmma_kernel(
+                A, B, C, scale_a, scale_b,
+                M, N, K, scale_mode,
+                threads=(((N + 31) // 32) * 32, ((M + 31) // 32) * 4),
+                group_size=(32, 4),
+            )
+        else:
+            # Scalar tiled fallback (M1)
+            lib.fp8_scaled_matmul_kernel(
+                A, B, C, scale_a, scale_b,
+                M, N, K, scale_mode,
+                threads=(N, M), group_size=(16, 16),
+            )
 
     return C
 
