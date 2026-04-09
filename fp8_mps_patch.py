@@ -180,11 +180,19 @@ def install():
         logger.info("fp8-mps-metal: patched torch.nn.functional.scaled_mm")
 
     # Patch 3: comfy_kitchen dequantize (optional — only if installed)
+    #
+    # fp8.py calls `ck.dequantize_per_tensor_fp8(qdata, scale, orig_dtype)` where
+    # `ck` is the comfy_kitchen module.  The public function in __init__.py then
+    # calls `torch.ops.comfy_kitchen.dequantize_fp8`, which is a custom PyTorch op
+    # that dispatches through an internal registry holding a direct reference to the
+    # eager backend function.  Patching the backend module attribute is invisible to
+    # the registry.  Patching the module-level attribute in comfy_kitchen.__init__
+    # intercepts the call before it ever reaches the custom op.
     try:
-        import comfy_kitchen.backends.eager.quantization as _ck_q
-        _original_ck_dequantize = _ck_q.dequantize_per_tensor_fp8
-        _ck_q.dequantize_per_tensor_fp8 = _metal_ck_dequantize
-        logger.info("fp8-mps-metal: patched comfy_kitchen dequantize_per_tensor_fp8")
+        import comfy_kitchen as _ck
+        _original_ck_dequantize = _ck.dequantize_per_tensor_fp8
+        _ck.dequantize_per_tensor_fp8 = _metal_ck_dequantize
+        logger.info("fp8-mps-metal: patched comfy_kitchen.dequantize_per_tensor_fp8")
     except ImportError:
         pass
 
@@ -207,8 +215,8 @@ def uninstall():
 
     if _original_ck_dequantize is not None:
         try:
-            import comfy_kitchen.backends.eager.quantization as _ck_q
-            _ck_q.dequantize_per_tensor_fp8 = _original_ck_dequantize
+            import comfy_kitchen as _ck
+            _ck.dequantize_per_tensor_fp8 = _original_ck_dequantize
         except ImportError:
             pass
         _original_ck_dequantize = None
