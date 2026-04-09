@@ -134,20 +134,18 @@ def fp8_quantize(input: torch.Tensor):
     count = inp.numel()
 
     # Compute scale: max_fp8 / max(abs(input))
-    amax = inp.abs().max().item()
+    amax_val = inp.abs().max().item()
     max_fp8 = 448.0
-    scale = max_fp8 / amax if amax > 0 else 1.0
+    scale = max_fp8 / amax_val if amax_val > 0 else 1.0
 
-    # Scale input before quantization
-    scaled = (inp * scale).contiguous()
-
+    # Fused scale + quantize in one GPU pass
     output = torch.empty(inp.shape, dtype=torch.uint8, device="mps")
 
-    lib.float_to_fp8_kernel(
-        scaled.view(-1), output.view(-1),
-        count,
+    lib.float_to_fp8_scaled_kernel(
+        inp.view(-1), output.view(-1),
+        count, scale,
         threads=(count,), group_size=(256,),
-            )
+    )
 
     inv_scale = torch.tensor([1.0 / scale], dtype=torch.float32, device="mps")
     return output, inv_scale

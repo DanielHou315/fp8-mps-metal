@@ -271,3 +271,17 @@ kernel void float_to_fp8_kernel(
     if (gid >= count) return;
     output[gid] = float_to_fp8_e4m3fn(input[gid]);
 }
+
+
+// ─── Fused scale + FP8 quantize (eliminates separate scale multiply) ────────
+
+kernel void float_to_fp8_scaled_kernel(
+    device const float* input [[buffer(0)]],
+    device uint8_t* output [[buffer(1)]],
+    constant uint& count [[buffer(2)]],
+    constant float& scale [[buffer(3)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= count) return;
+    output[gid] = float_to_fp8_e4m3fn(input[gid] * scale);
+}
