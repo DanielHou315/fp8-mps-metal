@@ -212,7 +212,7 @@ def fp8_scaled_mm_fast(A: torch.Tensor, B: torch.Tensor,
     B: (N, K) uint8 — FP8 e4m3fn encoded (pre-transposed)
     scale_a: per-tensor scale
     scale_b: per-tensor scale
-    Returns: (M, N) float32 on MPS
+    Returns: (M, N) float16 on MPS
     """
     lib = _get_lib()
 
@@ -252,4 +252,4 @@ def fp8_scaled_mm_fast(A: torch.Tensor, B: torch.Tensor,
     # Native FP16 matmul: A @ B^T = (M, K) @ (K, N) = (M, N)
     C = A_f16 @ B_f16.T
 
-    return C.float()
+    return C

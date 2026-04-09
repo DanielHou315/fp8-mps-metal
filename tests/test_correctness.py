@@ -213,6 +213,21 @@ class TestPreparedWeight:
         assert diff < 1e-2, f"Prepared vs unprepared diff {diff} exceeds 0.01"
 
 
+class TestFastPathDtype:
+    def test_fast_path_returns_fp16(self):
+        import fp8_mps_native
+        A_q, B_q, A_s, B_s, _, _ = make_fp8_pair(128, 256, 128)
+        result = fp8_mps_native.fp8_scaled_mm_fast(A_q, B_q, A_s, B_s)
+        assert result.dtype == torch.float16, f"Expected float16, got {result.dtype}"
+
+    def test_auto_with_prepared_returns_fp16(self):
+        import fp8_mps_native
+        A_q, B_q, A_s, B_s, _, _ = make_fp8_pair(128, 256, 128)
+        B_prep = fp8_mps_native.fp8_prepare_weight(B_q, B_s)
+        result = fp8_mps_native.fp8_scaled_mm_auto(A_q, B_prep, A_s, B_s)
+        assert result.dtype == torch.float16, f"Expected float16, got {result.dtype}"
+
+
 class TestMonkeyPatch:
 
     def test_install_uninstall(self):
