@@ -109,17 +109,14 @@ def fp8_dequantize(input: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
         input = input.to("mps")
 
     count = input.numel()
+    scale_val = scale.to(device="cpu", dtype=torch.float32).item()
     output = torch.empty(input.shape, dtype=torch.float16, device="mps")
 
-    lib.fp8_to_half_kernel(
+    lib.fp8_to_scaled_half_kernel(
         input.contiguous().view(-1), output.view(-1),
-        count,
+        count, scale_val,
         threads=(count,), group_size=(256,),
-            )
-
-    # Apply scale
-    scale_val = scale.to(device="mps", dtype=torch.float16)
-    output = output * scale_val
+    )
 
     return output
 
