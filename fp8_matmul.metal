@@ -186,9 +186,10 @@ kernel void fp8_scaled_vecmat_kernel(
     constant uint& scale_mode [[buffer(7)]],
     uint gid [[thread_position_in_grid]],
     uint simd_lane [[thread_index_in_simdgroup]],
-    uint simd_group [[simdgroup_index_in_threadgroup]]
+    uint simd_group [[simdgroup_index_in_threadgroup]],
+    uint tgid_x [[threadgroup_position_in_grid]]
 ) {
-    uint row = gid / 32;  // Each SIMD group handles one output row
+    uint row = tgid_x * 8 + simd_group;  // 8 simdgroups per 256-thread group
     if (row >= N) return;
 
     uint row_offset = row * K;

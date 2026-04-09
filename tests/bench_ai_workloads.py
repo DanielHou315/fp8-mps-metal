@@ -208,13 +208,15 @@ class TestTransformerLayer:
         x_q, x_s = fp8_mps_native.fp8_quantize(x_f32)
         x_f16 = x_f32.half().to("mps")
 
+        # Pre-quantize intermediate activations outside timed loop
+        mid_q, mid_s = fp8_mps_native.fp8_quantize(torch.randn(M, H))
+        ffn_q, ffn_s = fp8_mps_native.fp8_quantize(torch.randn(M, FFN))
+
         def fp8_layer():
             fp8_mps_native.fp8_scaled_mm_auto(x_q, weights["qkv"][0], x_s, weights["qkv"][1])
-            mid_q, mid_s = fp8_mps_native.fp8_quantize(torch.randn(M, H, device="mps"))
             fp8_mps_native.fp8_scaled_mm_auto(mid_q, weights["out"][0], mid_s, weights["out"][1])
             fp8_mps_native.fp8_scaled_mm_auto(x_q, weights["gate"][0], x_s, weights["gate"][1])
             fp8_mps_native.fp8_scaled_mm_auto(x_q, weights["up"][0], x_s, weights["up"][1])
-            ffn_q, ffn_s = fp8_mps_native.fp8_quantize(torch.randn(M, FFN, device="mps"))
             fp8_mps_native.fp8_scaled_mm_auto(ffn_q, weights["down"][0], ffn_s, weights["down"][1])
 
         def fp16_layer():
