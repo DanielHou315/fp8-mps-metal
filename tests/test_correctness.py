@@ -283,6 +283,24 @@ class TestMonkeyPatch:
         assert not fp8_mps_patch.is_installed()
 
 
+class TestMonkeyPatchCache:
+
+    def test_repeated_calls_same_result(self):
+        import fp8_mps_patch
+        fp8_mps_patch.install()
+        try:
+            A = torch.randint(0, 128, (4, 256), dtype=torch.uint8, device="mps")
+            B = torch.randint(0, 128, (256, 128), dtype=torch.uint8, device="mps")
+            sa = torch.tensor([0.01], device="mps")
+            sb = torch.tensor([0.01], device="mps")
+
+            r1 = torch._scaled_mm(A, B, scale_a=sa, scale_b=sb)
+            r2 = torch._scaled_mm(A, B, scale_a=sa, scale_b=sb)
+            assert torch.allclose(r1.float(), r2.float(), atol=1e-3)
+        finally:
+            fp8_mps_patch.uninstall()
+
+
 class TestPerChannelScaling:
 
     def test_per_row_scales(self):

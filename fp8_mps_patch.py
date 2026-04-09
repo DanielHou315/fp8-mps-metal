@@ -14,6 +14,7 @@ import torch
 
 _original_scaled_mm = None
 _installed = False
+_transposed_cache = {}
 
 
 def _metal_scaled_mm(input, other, *, out_dtype=None, scale_a=None, scale_b=None, bias=None, scale_result=None, use_fast_accum=False):
@@ -47,7 +48,14 @@ def _metal_scaled_mm(input, other, *, out_dtype=None, scale_a=None, scale_b=None
 
     # torch._scaled_mm expects other as (K, N), our kernel wants B as (N, K)
     # other is (K, N), we need (N, K) = other.T which is contiguous in row-major
-    B = other.t().contiguous()
+    # Cache transposed weight to avoid N*K copy on every call
+    cache_key = other.data_ptr()
+    expected_shape = (other.shape[1], other.shape[0])
+    if cache_key in _transposed_cache and _transposed_cache[cache_key].shape == expected_shape:
+        B = _transposed_cache[cache_key]
+    else:
+        B = other.t().contiguous()
+        _transposed_cache[cache_key] = B
 
     # Default scales
     if scale_a is None:
@@ -88,7 +96,7 @@ def install():
 
 def uninstall():
     """Restore original torch._scaled_mm."""
-    global _original_scaled_mm, _installed
+    global _original_scaled_mm, _installed, _transposed_cache
     if not _installed:
         return
 
@@ -96,6 +104,7 @@ def uninstall():
         torch._scaled_mm = _original_scaled_mm
         _original_scaled_mm = None
     _installed = False
+    _transposed_cache = {}
 
 
 def is_installed():
