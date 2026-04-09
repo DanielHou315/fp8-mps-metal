@@ -193,7 +193,7 @@ def fp8_scaled_mm_auto(A: torch.Tensor, B: torch.Tensor,
     K=4096,N=14336. Crossover is between M=16 and M=32.
     """
     M = A.shape[0]
-    if B.dtype == torch.float16:
+    if A.dtype == torch.float16 or B.dtype == torch.float16:
         return fp8_scaled_mm_fast(A, B, scale_a, scale_b)
     if M <= 16:
         return fp8_scaled_mm(A, B, scale_a, scale_b)
@@ -225,16 +225,18 @@ def fp8_scaled_mm_fast(A: torch.Tensor, B: torch.Tensor,
     M, K = A.shape
     N = B.shape[0]
 
-    sa_val = scale_a.to(device="cpu", dtype=torch.float32).item()
-
-    # Dequant+scale A to FP16 in one pass
-    A_f16 = torch.empty(M, K, dtype=torch.float16, device="mps")
-    count_a = A.numel()
-    lib.fp8_to_scaled_half_kernel(
-        A.contiguous().view(-1), A_f16.view(-1),
-        count_a, sa_val,
-        threads=(count_a,), group_size=(256,),
-    )
+    # A: use FP16 directly if already dequantized, otherwise dequant+scale
+    if A.dtype == torch.float16:
+        A_f16 = A
+    else:
+        sa_val = scale_a.to(device="cpu", dtype=torch.float32).item()
+        A_f16 = torch.empty(M, K, dtype=torch.float16, device="mps")
+        count_a = A.numel()
+        lib.fp8_to_scaled_half_kernel(
+            A.contiguous().view(-1), A_f16.view(-1),
+            count_a, sa_val,
+            threads=(count_a,), group_size=(256,),
+        )
 
     # B: use pre-prepared FP16 if available, otherwise dequant+scale
     if B.dtype == torch.float16:

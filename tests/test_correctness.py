@@ -228,6 +228,37 @@ class TestFastPathDtype:
         assert result.dtype == torch.float16, f"Expected float16, got {result.dtype}"
 
 
+class TestFP16Activations:
+    @pytest.mark.parametrize("M,K,N", [(1, 4096, 4096), (128, 4096, 4096)])
+    def test_fp16_activation_accuracy(self, M, K, N):
+        import fp8_mps_native
+
+        A_q, B_q, A_s, B_s, A_f32, B_f32 = make_fp8_pair(M, K, N)
+        ref = A_f32 @ B_f32.T
+
+        # Simulate FP16 activation (pre-scaled)
+        A_f16 = fp8_mps_native.fp8_dequantize(A_q, A_s).to(device="mps")
+        B_prepared = fp8_mps_native.fp8_prepare_weight(B_q, B_s)
+
+        result = fp8_mps_native.fp8_scaled_mm_auto(A_f16, B_prepared, A_s, B_s)
+        ref_rms = torch.sqrt((ref ** 2).mean()).item()
+        rel_rmse = torch.sqrt(((result.cpu().float() - ref) ** 2).mean()).item() / ref_rms
+        assert rel_rmse < 0.15, f"FP16 activation RMSE {rel_rmse:.4%} exceeds 15%"
+
+    def test_fp16_activation_skips_dequant(self):
+        """When A is FP16, fast path should use it directly (no dequant dispatch)."""
+        import fp8_mps_native
+
+        A_f16 = torch.randn(4, 256, dtype=torch.float16, device="mps")
+        B_f16 = torch.randn(128, 256, dtype=torch.float16, device="mps")
+        result = fp8_mps_native.fp8_scaled_mm_fast(
+            A_f16, B_f16,
+            torch.tensor([1.0]), torch.tensor([1.0])
+        )
+        assert result.shape == (4, 128)
+        assert torch.isfinite(result).all()
+
+
 class TestMonkeyPatch:
 
     def test_install_uninstall(self):
