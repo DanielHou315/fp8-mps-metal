@@ -129,8 +129,8 @@ kernel void fp8_scaled_matmul_kernel(
     uint row = tgid.y * TILE + tid.y;
     uint col = tgid.x * TILE + tid.x;
 
-    threadgroup float tileA[TILE][TILE];  // 16x16 = 1KB
-    threadgroup float tileB[TILE][TILE];  // 16x16 = 1KB
+    threadgroup half tileA[TILE][TILE];   // 16x16 = 512B
+    threadgroup half tileB[TILE][TILE];   // 16x16 = 512B
 
     float sum = 0.0f;
 
@@ -141,7 +141,7 @@ kernel void fp8_scaled_matmul_kernel(
         uint a_row = tgid.y * TILE + tid.y;
         uint a_k = kk + tid.x;
         tileA[tid.y][tid.x] = (a_row < M && a_k < K)
-            ? fp8_e4m3fn_lut[A[a_row * K + a_k]] : 0.0f;
+            ? half(fp8_e4m3fn_lut[A[a_row * K + a_k]]) : half(0.0h);
 
         // tileB[tid.x][tid.y] = decoded B[col_for_tid.x, kk + tid.y]
         // tid.x indexes the N dimension, tid.y indexes the K dimension
@@ -149,13 +149,13 @@ kernel void fp8_scaled_matmul_kernel(
         uint b_row = tgid.x * TILE + tid.x;
         uint b_k = kk + tid.y;
         tileB[tid.x][tid.y] = (b_row < N && b_k < K)
-            ? fp8_e4m3fn_lut[B[b_row * K + b_k]] : 0.0f;
+            ? half(fp8_e4m3fn_lut[B[b_row * K + b_k]]) : half(0.0h);
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         // Accumulate partial dot product from tile
         for (uint k = 0; k < TILE; k++) {
-            sum += tileA[tid.y][k] * tileB[tid.x][k];
+            sum += float(tileA[tid.y][k]) * float(tileB[tid.x][k]);
         }
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
