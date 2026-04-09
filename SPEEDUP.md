@@ -248,6 +248,43 @@ Added deprecation notices to `fp8_bridge.cpp`, `setup.py`, and pybind11 module d
 | prefill128/ffn_g (M=128, prepared) | — | 1.039ms | **new API** | 1.31x |
 | M=16 K=N=4096 (was routed to slow path) | 1.83ms | 0.69ms | **62% faster** | — |
 
+### P8-P18 Second Round (MERGED / EVALUATED)
+
+| Task | Status | Impact |
+|---|---|---|
+| **P8**: Remove .float() upcast from fast path | MERGED | Returns FP16 directly, 1 fewer dispatch |
+| **P9**: Accept FP16 activations | MERGED | Skip A dequant when A is already FP16 |
+| **P10**: Fused scale in fp8_dequantize | MERGED | 1 fewer dispatch per dequantize call |
+| **P11**: Tile size 16→32 | DISCARDED | 65-73% regression (register pressure at 1024 threads) |
+| **P12**: Cache transposed B in monkey-patch | MERGED | Avoids N*K copy per call in ComfyUI path |
+| **P13**: Half-precision tile arrays | MERGED | **22-25% faster** fused kernel, crossover pushed to M=32 |
+| **P14**: Fused scale+quantize kernel | MERGED | 2 fewer dispatches in fp8_quantize |
+| **P15**: SGMMA matmul (M2+ with M1 fallback) | MERGED | **1.8-2.1x faster** fused kernel via hardware matrix units |
+| **P16**: Metal 4 MPP evaluation | NOT VIABLE | PyTorch lacks setTensorBuffer; no FP8 type in MPP |
+| **P17**: Fix benchmark timing | MERGED | Removed GPU→CPU sync from timed loop |
+| **P18**: Eliminate vecmat integer division | MERGED | Cleanup (sub-percent impact) |
+
+### Final results after all optimizations (P1-P18)
+
+| Shape | Original | Final (P1-P18) | Cumulative | vs FP16 |
+|---|---|---|---|---|
+| decode/ffn_gate (M=1, N=14336) fused | 0.553ms | 0.443ms | **20% faster** | **0.66x (FP8 wins)** |
+| decode/ffn_down (M=1, N=14336→4096) fused | 0.568ms | 0.483ms | **15% faster** | **0.76x (FP8 wins)** |
+| prefill128/qkv fused (SGMMA) | 12.53ms | 1.51ms | **88% faster** | 4.5x |
+| prefill128/ffn_g fused (SGMMA) | 43.13ms | 4.36ms | **90% faster** | 5.5x |
+| prefill512/qkv fused (SGMMA) | 49.16ms | 4.96ms | **90% faster** | 6.4x |
+| prefill128/ffn_g fast (unprepared) | 2.583ms | 2.008ms | **22% faster** | 2.55x |
+| prefill128/ffn_g prepared | — | 0.974ms | **new API** | **1.23x** |
+| prefill512/ffn_g prepared | — | 2.286ms | **new API** | **1.10x** |
+| M=16 K=N=4096 (fused SGMMA) | 1.83ms | 0.529ms | **71% faster** | — |
+
+**Key takeaways:**
+- SGMMA fused kernel is 88-90% faster than original for prefill (but still slower than native FP16)
+- Prepared weights at M=512+ are within **10-15% of native FP16** — nearly at parity
+- M=1 decode with large N: FP8 wins by 24-34% vs FP16 (memory bandwidth advantage)
+- The fast path (dequant+native matmul) with prepared weights remains the best strategy for M>=64
+- SGMMA fused kernel dominates for M=2-32 range
+
 ---
 
 ## Proposed Implementation Order
@@ -259,3 +296,4 @@ Added deprecation notices to `fp8_bridge.cpp`, `setup.py`, and pybind11 module d
 5. ~~**P4** (weight cache)~~ — DONE
 6. ~~**P1** (tiled 2D kernel)~~ — DONE
 7. ~~**P7** (deprecate C++ bridge)~~ — DONE
+8. ~~**P8-P18** (second round)~~ — DONE (see above)
