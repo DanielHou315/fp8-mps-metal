@@ -46,12 +46,12 @@ And a monkey-patch that transparently intercepts `torch._scaled_mm` so ComfyUI/d
 
 | Path | M=1, K=4096 | M=1, K=14336 | M=4, K=4096 |
 |------|------------|-------------|-------------|
-| **FP16 native** (baseline) | 0.44 ms | 0.63 ms | 0.31 ms |
-| **Our fused kernel** | 0.39 ms | 0.82 ms | 0.89 ms |
-| **CPU fallback** (without this patch) | 2.08 ms | 6.29 ms | 3.81 ms |
-| **Speedup vs CPU** | **5.3x** | **7.7x** | **4.3x** |
+| **FP16 native** (baseline) | 0.40 ms | 1.68 ms | 0.30 ms |
+| **Our fused kernel** | 0.29 ms | 1.25 ms | 0.50 ms |
+| **CPU fallback** (without this patch) | 2.83 ms | 21.6 ms | 2.39 ms |
+| **Speedup vs CPU** | **9.7x** | **17.2x** | **4.8x** |
 
-At M=1, K=4096 the fused kernel beats FP16 native (0.39 ms vs 0.44 ms) — the FP8 decode fuses with the matmul and wins at this shape.
+At M=1 the fused kernel beats FP16 native (single-token inference) — FP8 decode fuses with the matmul and wins where memory bandwidth dominates.
 
 ### M4 Pro (48GB, macOS 26.2, PyTorch 2.10.0) — prior code
 
