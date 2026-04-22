@@ -1,19 +1,14 @@
 #!/usr/bin/env python3
 """
-Test suite for fp8_metal: FP8 Metal kernel accuracy and performance.
-
-Tests both implementations:
-  - C++ extension (fp8_metal) — works via buffer copies
-  - Native torch.mps.compile_shader (fp8_mps_native) — zero-copy, preferred
+Legacy test script for fp8-mps-metal. Canonical tests live in tests/test_correctness.py.
 
 Tests:
   1. Exhaustive FP8 decode: all 256 uint8 values vs Python reference
-  2. Matmul accuracy (C++ ext): FP8 scaled_mm vs FP32 reference
-  3. Matmul accuracy (native): FP8 scaled_mm vs FP32 reference
-  4. Quantize/dequantize roundtrip
-  5. Vecmat (M=1) kernel path
-  6. Performance: all paths at realistic dimensions
-  7. Monkey-patch install/uninstall
+  2. Matmul accuracy (native): FP8 scaled_mm vs FP32 reference
+  3. Quantize/dequantize roundtrip
+  4. Vecmat (M=1) kernel path
+  5. Performance: all paths at realistic dimensions
+  6. Monkey-patch install/uninstall
 """
 
 import time
@@ -86,41 +81,10 @@ def test_exhaustive_fp8_decode():
     return passed
 
 
-def test_matmul_accuracy_cpp():
-    """Test FP8 scaled matmul (C++ ext) against FP32 reference."""
-    print("=" * 60)
-    print("Test 2: Matmul accuracy — C++ extension")
-    print("=" * 60)
-
-    import fp8_metal
-
-    M, K, N = 64, 256, 128
-    A_f32 = torch.randn(M, K)
-    B_f32 = torch.randn(N, K)
-    ref = A_f32 @ B_f32.T
-
-    A_q, A_scale = fp8_metal.fp8_quantize(A_f32)
-    B_q, B_scale = fp8_metal.fp8_quantize(B_f32)
-    result = fp8_metal.fp8_scaled_mm(A_q, B_q, A_scale, B_scale)
-    result_cpu = result.cpu().float()
-
-    diff = result_cpu - ref
-    rmse = torch.sqrt((diff ** 2).mean()).item()
-    ref_rms = torch.sqrt((ref ** 2).mean()).item()
-    rel_rmse = rmse / ref_rms if ref_rms > 0 else rmse
-
-    print(f"  Relative RMSE: {rel_rmse:.4%}")
-    print(f"  Max abs error: {diff.abs().max().item():.4f}")
-    passed = rel_rmse < 0.15
-    print(f"  RESULT: {'PASS' if passed else 'FAIL'}")
-    print()
-    return passed
-
-
 def test_matmul_accuracy_native():
     """Test FP8 scaled matmul (native) against FP32 reference."""
     print("=" * 60)
-    print("Test 3: Matmul accuracy — Native (fused + fast)")
+    print("Test 2: Matmul accuracy — Native (fused + fast)")
     print("=" * 60)
 
     import fp8_mps_native
@@ -159,7 +123,7 @@ def test_matmul_accuracy_native():
 def test_quantize_roundtrip():
     """Test quantize → dequantize roundtrip (native)."""
     print("=" * 60)
-    print("Test 4: Quantize/dequantize roundtrip — Native")
+    print("Test 3: Quantize/dequantize roundtrip — Native")
     print("=" * 60)
 
     import fp8_mps_native
@@ -183,7 +147,7 @@ def test_quantize_roundtrip():
 def test_vecmat_native():
     """Test M=1 vecmat kernel path (native)."""
     print("=" * 60)
-    print("Test 5: Vecmat (M=1) — Native")
+    print("Test 4: Vecmat (M=1) — Native")
     print("=" * 60)
 
     import fp8_mps_native
@@ -213,7 +177,7 @@ def test_vecmat_native():
 def test_performance():
     """Benchmark all FP8 paths at realistic dimensions."""
     print("=" * 60)
-    print("Test 6: Performance benchmarks (realistic dimensions)")
+    print("Test 5: Performance benchmarks (realistic dimensions)")
     print("=" * 60)
 
     import fp8_mps_native
@@ -310,7 +274,7 @@ def test_performance():
 def test_monkey_patch():
     """Test monkey-patch install/uninstall."""
     print("=" * 60)
-    print("Test 7: Monkey-patch install/uninstall")
+    print("Test 6: Monkey-patch install/uninstall")
     print("=" * 60)
 
     import fp8_mps_patch
@@ -345,7 +309,6 @@ if __name__ == "__main__":
 
     results = {}
     results["exhaustive_decode"] = test_exhaustive_fp8_decode()
-    results["matmul_cpp_ext"] = test_matmul_accuracy_cpp()
     results["matmul_native"] = test_matmul_accuracy_native()
     results["roundtrip"] = test_quantize_roundtrip()
     results["vecmat"] = test_vecmat_native()

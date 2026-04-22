@@ -2,10 +2,7 @@
 FP8 Metal kernels using PyTorch's native torch.mps.compile_shader() API.
 
 Zero-copy dispatch: kernels run directly on MPS tensor buffers.
-No C++ extension needed — pure Python + Metal shader source.
-
-This replaces the C++ bridge approach for dramatically better performance
-since it avoids MPS→CPU→Metal→CPU→MPS buffer copies.
+No compilation step needed — pure Python + Metal shader source.
 """
 
 import torch

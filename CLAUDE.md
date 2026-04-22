@@ -4,10 +4,7 @@ FP8 (e4m3fn) quantized matrix multiplication kernels for Apple Silicon via Metal
 
 ## Architecture
 
-Two execution paths, both using the same Metal shader (`fp8_matmul.metal`):
-
-- **Native path** (`fp8_mps_native.py`) — preferred. Uses `torch.mps.compile_shader()` for zero-copy dispatch directly on MPS tensor buffers.
-- **C++ bridge** (`fp8_bridge.cpp` + `setup.py`) — legacy. Requires compilation, forces CPU round-trips. Slower.
+Single execution path via `torch.mps.compile_shader()` — zero-copy dispatch directly on MPS tensor buffers. No compilation step required.
 
 Monkey-patch (`fp8_mps_patch.py`) replaces `torch._scaled_mm` to transparently route FP8 on MPS through the native path.
 
@@ -18,8 +15,6 @@ Monkey-patch (`fp8_mps_patch.py`) replaces `torch._scaled_mm` to transparently r
 | `fp8_matmul.metal` | All Metal GPU kernels: 2D matmul, vecmat (M=1), dequant, quant |
 | `fp8_mps_native.py` | Python API: `fp8_scaled_mm`, `fp8_scaled_mm_fast`, `fp8_scaled_mm_auto`, `fp8_quantize`, `fp8_dequantize` |
 | `fp8_mps_patch.py` | Monkey-patch for `torch._scaled_mm` |
-| `fp8_bridge.cpp` | C++ pybind11 extension (legacy path) |
-| `setup.py` | Builds C++ extension, auto-downloads metal-cpp headers |
 
 ## ComfyUI integration
 

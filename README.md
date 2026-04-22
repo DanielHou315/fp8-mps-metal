@@ -4,7 +4,7 @@
 
 If you've tried to run FLUX, SD3.5, or any FP8-quantized model on your Mac and hit cryptic errors like `"does not have support for that dtype"` or `"_scaled_mm not implemented for MPS"` — this is the fix. This repo contains a Metal compute shader that performs FP8 (e4m3fn) dequantization and matrix multiplication directly on the GPU, exposed to PyTorch as a drop-in monkey-patch.
 
-> **Tested on:** M4 Pro (48GB), macOS 26.2, PyTorch 2.10.0, Python 3.12
+> **Tested on:** M5 Pro (64GB), macOS 26.4, PyTorch 2.11.0, Python 3.12
 
 ## Quick Start
 
@@ -12,19 +12,15 @@ If you've tried to run FLUX, SD3.5, or any FP8-quantized model on your Mac and h
 git clone https://github.com/tashiscool/fp8-mps-metal.git
 cd fp8-mps-metal
 
-# Option A: Pure Python (no compilation needed — recommended)
 python -c "
 import torch, sys; sys.path.insert(0, '.')
 import fp8_mps_patch
 fp8_mps_patch.install()
 print('FP8 MPS patch installed — FLUX/SD3.5 models should now work')
 "
-
-# Option B: Build C++ extension (slightly different perf characteristics)
-pip install -e .
 ```
 
-No Xcode required. The Metal shader compiles at runtime via `torch.mps.compile_shader()`.
+No Xcode required. No compilation step. The Metal shader compiles at runtime via `torch.mps.compile_shader()`.
 
 ## What This Solves
 
@@ -46,16 +42,25 @@ And a monkey-patch that transparently intercepts `torch._scaled_mm` so ComfyUI/d
 
 ## Performance
 
-Tested on M4 Pro (48GB, 20 GPU cores, Metal 4):
+### M5 Pro (64GB, macOS 26.4, PyTorch 2.11.0)
+
+| Path | M=1, K=4096 | M=1, K=14336 | M=4, K=4096 |
+|------|------------|-------------|-------------|
+| **FP16 native** (baseline) | 0.44 ms | 0.63 ms | 0.31 ms |
+| **Our fused kernel** | 0.39 ms | 0.82 ms | 0.89 ms |
+| **CPU fallback** (without this patch) | 2.08 ms | 6.29 ms | 3.81 ms |
+| **Speedup vs CPU** | **5.3x** | **7.7x** | **4.3x** |
+
+At M=1, K=4096 the fused kernel beats FP16 native (0.39 ms vs 0.44 ms) — the FP8 decode fuses with the matmul and wins at this shape.
+
+### M4 Pro (48GB, macOS 26.2, PyTorch 2.10.0) — prior code
 
 | Path | M=1, K=4096 | M=1, K=14336 | M=4, K=4096 |
 |------|------------|-------------|-------------|
 | **FP16 native** (baseline) | 0.20 ms | 1.64 ms | 0.13 ms |
 | **Our fused kernel** | 0.66 ms | 2.38 ms | 1.03 ms |
-| **CPU fallback** (what you have now) | 4.47 ms | 62.79 ms | 3.99 ms |
+| **CPU fallback** (without this patch) | 4.47 ms | 62.79 ms | 3.99 ms |
 | **Speedup vs CPU** | **6.4x** | **26.3x** | **3.9x** |
-
-The fused kernel is 4–26x faster than the CPU fallback path. At K=14336 (typical for large diffusion models), the improvement is dramatic.
 
 **Accuracy:** 4% relative RMSE vs FP32 reference (expected for 8-bit quantization). Perfect decode across all 256 FP8 bit patterns.
 
@@ -304,11 +309,9 @@ ComfyUI loads this on startup and all FLUX/SD3.5 FP8 `_scaled_mm` calls are tran
 
 ```
 fp8_matmul.metal      Metal GPU kernels (FP8 bit-unpacking + matmul)
-fp8_mps_native.py     Zero-copy API using torch.mps.compile_shader()  ← RECOMMENDED
+fp8_mps_native.py     Zero-copy API using torch.mps.compile_shader()
 fp8_mps_patch.py      Monkey-patch for torch._scaled_mm
-fp8_bridge.cpp        C++ extension (alternative, uses metal-cpp + pybind11)
-setup.py              Build system for C++ extension
-test_fp8_metal.py     Full test suite (accuracy + performance + integration)
+tests/                Correctness + benchmark suite
 ```
 
 ### How FP8 Decoding Works
@@ -334,23 +337,26 @@ The vecmat kernel (M=1 inference path) uses Metal's hardware SIMD reduction (`si
 ## Running Tests
 
 ```bash
-python test_fp8_metal.py
+cd tests
+uv run pytest test_correctness.py -v
 ```
 
-Expected output:
-```
-Test 1: Exhaustive FP8 decode (256 patterns)    PASS
-Test 2: Matmul accuracy — C++ extension          PASS  (4.0% RMSE)
-Test 3: Matmul accuracy — Native (fused + fast)  PASS  (4.0% RMSE)
-Test 4: Quantize/dequantize roundtrip            PASS
-Test 5: Vecmat (M=1)                             PASS
-Test 6: Performance benchmarks                   REPORTED
-Test 7: Monkey-patch install/uninstall           PASS
-```
+## Hardware Benchmarks
 
-## Hardware Benchmarks (M4 Pro, 48GB)
+Your results will vary by chip. Numbers below are from our validated test suite.
 
-These numbers are from our validated test suite. Your results will vary by chip.
+### M5 Pro (64GB, macOS 26.4, PyTorch 2.11.0)
+
+| Metric | Value |
+|--------|-------|
+| Peak GEMM (FP32, 4096x4096) | 7.34 TFLOPS |
+| Memory bandwidth (1GB copy) | 266 GB/s |
+| SDPA attention (seq=2048, 32h, d=128) | 24.4 ms |
+| SwiGLU FFN (seq=2048, hidden=4096) | 18.6 ms |
+| RMSNorm (batch=1, seq=2048) | 0.28 ms |
+| KV-cache per step (cache=256) | 0.26 ms |
+
+### M4 Pro (48GB, macOS 26.2, PyTorch 2.10.0)
 
 | Metric | Value |
 |--------|-------|
